@@ -13,9 +13,8 @@ detector = MTCNN()
 # Start webcam
 cap = cv2.VideoCapture(0)
 
-labels = ["Mask", "No Mask"]
-
-prev_time = 0
+# Updated labels for 3 classes
+labels = ["Mask", "No Mask", "Incorrect Mask"]
 
 while True:
 
@@ -31,7 +30,6 @@ while True:
 
         x, y, w, h = face['box']
 
-        # Fix negative coordinates
         x = abs(x)
         y = abs(y)
 
@@ -40,36 +38,38 @@ while True:
         if face_crop.size == 0:
             continue
 
+        # Preprocess image
         face_crop = cv2.resize(face_crop, (224,224))
         face_crop = face_crop / 255.0
-        face_crop = np.reshape(face_crop,(1,224,224,3))
+        face_crop = np.reshape(face_crop, (1,224,224,3))
 
+        # Prediction
         prediction = model.predict(face_crop, verbose=0)[0]
-
-        mask_prob = prediction[0]
-        no_mask_prob = prediction[1]
 
         label_index = np.argmax(prediction)
         label = labels[label_index]
 
-        confidence = max(mask_prob, no_mask_prob) * 100
+        confidence = prediction[label_index] * 100
 
+        # Color coding
         if label == "Mask":
-            color = (0,255,0)
+            color = (0,255,0)       # Green
+        elif label == "No Mask":
+            color = (0,0,255)       # Red
         else:
-            color = (0,0,255)
+            color = (0,255,255)     # Yellow
 
         text = f"{label}: {confidence:.2f}%"
 
-        # Draw rectangle
+        # Draw face box
         cv2.rectangle(frame,(x,y),(x+w,y+h),color,2)
 
-        # Label text
+        # Display label
         cv2.putText(frame, text, (x,y-10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7, color, 2)
 
-        # Warning for No Mask
+        # Warning messages
         if label == "No Mask":
             cv2.putText(frame,
                         "WARNING: Please Wear a Mask",
@@ -79,7 +79,16 @@ while True:
                         (0,0,255),
                         3)
 
-    # Calculate FPS
+        if label == "Incorrect Mask":
+            cv2.putText(frame,
+                        "WARNING: Cover Your Nose Properly",
+                        (20,90),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0,255,255),
+                        3)
+
+    # FPS calculation
     end_time = time.time()
     fps = 1 / (end_time - start_time)
 
