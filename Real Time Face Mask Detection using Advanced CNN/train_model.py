@@ -5,8 +5,9 @@ from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2
 from tensorflow.keras.layers import AveragePooling2D, Flatten, Dense, Dropout
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
+import json
 
-dataset_path = "dataset"
+dataset_path = "Train"
 
 datagen = ImageDataGenerator(
     rescale=1./255,
@@ -32,8 +33,13 @@ val_data = datagen.flow_from_directory(
     subset="validation"
 )
 
+# 🔥 Save class label mapping (VERY IMPORTANT)
+with open("labels.json", "w") as f:
+    json.dump(train_data.class_indices, f)
+
 baseModel = MobileNetV2(weights="imagenet", include_top=False,
                         input_shape=(224,224,3))
+
 num_classes = train_data.num_classes
 
 headModel = baseModel.output
