@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Face Mask Detection — Live Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0b0d14;
+    color: #cbd5e1;
+    min-height: 100vh;
+    padding: 20px 24px 32px;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .header-left h1 { font-size: 20px; font-weight: 600; color: #f1f5f9; }
+  .header-left p  { font-size: 12px; color: #475569; margin-top: 3px; }
+  .status-pill {
+    display: flex; align-items: center; gap: 8px;
+    background: #1a1d2e; border: 1px solid #2d3148;
+    border-radius: 999px; padding: 6px 14px;
+    font-size: 12px; color: #94a3b8;
+  }
+  .pulse {
+    width: 8px; height: 8px; border-radius: 50%; background: #22c55e;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  .pulse.off { background: #ef4444; animation: none; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+  /* ── Metric cards ── */
+  .metrics-row {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .mc {
+    background: #13151f;
+    border: 1px solid #1e2235;
+    border-radius: 10px;
+    padding: 14px 16px;
+    transition: border-color 0.3s;
+  }
+  .mc-lbl { font-size: 10px; color: #475569; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+  .mc-val { font-size: 26px; font-weight: 700; line-height: 1; transition: color 0.4s; }
+  .mc-sub { font-size: 10px; color: #334155; margin-top: 5px; }
+  .v-green  { color: #86efac; }
+  .v-red    { color: #fca5a5; }
+  .v-amber  { color: #fcd34d; }
+  .v-blue   { color: #93c5fd; }
+  .v-purple { color: #c4b5fd; }
+
+  /* ── Chart grid ── */
+  .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .cc {
+    background: #13151f;
+    border: 1px solid #1e2235;
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .ct { font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 2px; }
+  .cs { font-size: 11px; color: #334155; margin-bottom: 12px; }
+
+  /* Legend */
+  .leg { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+  .li  { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #64748b; }
+  .ld  { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .lds { width: 22px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+
+  /* ── Detection log ── */
+  .log-wrap { max-height: 260px; overflow-y: auto; }
+  .log-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 0; border-bottom: 1px solid #1a1d2e;
+    font-size: 12px; color: #94a3b8;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:none; } }
+  .log-row:last-child { border-bottom: none; }
+  .log-badge {
+    font-size: 10px; font-weight: 600; padding: 2px 8px;
+    border-radius: 999px; white-space: nowrap; flex-shrink: 0;
+  }
+  .bg-mask      { background: rgba(134,239,172,0.15); color: #86efac; }
+  .bg-nomask    { background: rgba(248,113,113,0.15); color: #fca5a5; }
+  .bg-incorrect { background: rgba(252,211,77,0.15);  color: #fcd34d; }
+  .log-conf { margin-left: auto; color: #475569; white-space: nowrap; }
+  .log-time { color: #334155; font-size: 10px; }
+
+  /* Conf bar */
+  .conf-bar-wrap { background: #1a1d2e; border-radius: 4px; height: 6px; flex: 1; overflow: hidden; }
+  .conf-bar { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+
+  /* ── No-data overlay ── */
+  .no-data {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: #1e2235; font-size: 13px; text-align: center;
+    pointer-events: none;
+  }
+  .canvas-wrap { position: relative; }
+
+  /* ── Responsive ── */
+  @media (max-width: 1100px) {
+    .metrics-row { grid-template-columns: repeat(3, 1fr); }
+    .row-3 { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 750px) {
+    .row-2, .row-3 { grid-template-columns: 1fr; }
+    .metrics-row { grid-template-columns: 1fr 1fr; }
+  }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #1e2235; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <h1>Face Mask Detection — Live Dashboard</h1>
+    <!-- Updated: reflects YOLOv8n detector -->
+    <p>MobileNetV2 · YOLOv8n · Real-time inference · FRP Project Group 2</p>
+  </div>
+  <div class="status-pill">
+    <div class="pulse off" id="statusDot"></div>
+    <span id="statusText">Connecting...</span>
+  </div>
+</div>
+
+<!-- Metric cards -->
+<div class="metrics-row">
+  <div class="mc">
+    <div class="mc-lbl">Total frames</div>
+    <div class="mc-val v-blue" id="mFrames">0</div>
+    <div class="mc-sub">processed by model</div>
+  </div>
+  <div class="mc">
+    <div class="mc-lbl">Faces detected</div>
+    <div class="mc-val v-purple" id="mFaces">0</div>
+    <!-- Updated: YOLOv8n -->
+    <div class="mc-sub">by YOLOv8n detector</div>
+  </div>
+  <div class="mc">
+    <div class="mc-lbl">Mask</div>
+    <div class="mc-val v-green" id="mMask">0</div>
+    <div class="mc-sub">correctly wearing mask</div>
+  </div>
+  <div class="mc">
+    <div class="mc-lbl">No Mask</div>
+    <div class="mc-val v-red" id="mNoMask">0</div>
+    <div class="mc-sub">no mask detected</div>
+  </div>
+  <div class="mc">
+    <div class="mc-lbl">Incorrect Mask</div>
+    <div class="mc-val v-amber" id="mIncorrect">0</div>
+    <div class="mc-sub">threshold: 30% override</div>
+  </div>
+</div>
+
+<!-- Row 1: FPS over time + Confidence over time -->
+<div class="row-2">
+  <div class="cc">
+    <p class="ct">Frames per second — live</p>
+    <!-- Updated: YOLOv8n pipeline -->
+    <p class="cs">Real-time inference speed · YOLOv8n + MobileNetV2 pipeline</p>
+    <div class="leg">
+      <span class="li"><span class="lds" style="background:#818cf8;"></span>FPS</span>
+      <span class="li"><span class="lds" style="background:#334155;border-style:dashed;height:1px;"></span>Target 30fps</span>
+    </div>
+    <div class="canvas-wrap" style="height:180px;">
+      <canvas id="fpsChart"></canvas>
+      <div class="no-data" id="fpsND">Waiting for detections...</div>
+    </div>
+  </div>
+  <div class="cc">
+    <p class="ct">Confidence score — per detection</p>
+    <p class="cs">Softmax probability of predicted class over time</p>
+    <div class="leg">
+      <span class="li"><span class="ld" style="background:#86efac;"></span>Mask</span>
+      <span class="li"><span class="ld" style="background:#fca5a5;"></span>No Mask</span>
+      <span class="li"><span class="ld" style="background:#fcd34d;"></span>Incorrect Mask</span>
+    </div>
+    <div class="canvas-wrap" style="height:180px;">
+      <canvas id="confChart"></canvas>
+      <div class="no-data" id="confND">Waiting for detections...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Row 2: Class distribution donut + Per-class bar + Detection log -->
+<div class="row-3">
+  <div class="cc">
+    <p class="ct">Class distribution</p>
+    <p class="cs">Live proportion of each predicted class</p>
+    <div class="leg">
+      <span class="li"><span class="ld" style="background:#86efac;"></span>Mask</span>
+      <span class="li"><span class="ld" style="background:#fca5a5;"></span>No Mask</span>
+      <span class="li"><span class="ld" style="background:#fcd34d;"></span>Incorrect</span>
+    </div>
+    <div class="canvas-wrap" style="height:210px;">
+      <canvas id="distChart"></canvas>
+      <div class="no-data" id="distND">Waiting for detections...</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;" id="distStats">
+      <div style="flex:1;text-align:center;background:#1a1d2e;border-radius:8px;padding:8px 4px;">
+        <div style="font-size:16px;font-weight:700;color:#86efac;" id="pMask">0%</div>
+        <div style="font-size:10px;color:#334155;margin-top:2px;">mask</div>
+      </div>
+      <div style="flex:1;text-align:center;background:#1a1d2e;border-radius:8px;padding:8px 4px;">
+        <div style="font-size:16px;font-weight:700;color:#fca5a5;" id="pNoMask">0%</div>
+        <div style="font-size:10px;color:#334155;margin-top:2px;">no mask</div>
+      </div>
+      <div style="flex:1;text-align:center;background:#1a1d2e;border-radius:8px;padding:8px 4px;">
+        <div style="font-size:16px;font-weight:700;color:#fcd34d;" id="pIncorrect">0%</div>
+        <div style="font-size:10px;color:#334155;margin-top:2px;">incorrect</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cc">
+    <p class="ct">Cumulative detection counts</p>
+    <p class="cs">Total detections per class since session start</p>
+    <div class="canvas-wrap" style="height:240px;">
+      <canvas id="countChart"></canvas>
+      <div class="no-data" id="countND">Waiting for detections...</div>
+    </div>
+    <div style="margin-top:12px;">
+      <div style="font-size:10px;color:#334155;margin-bottom:6px;">Live session time</div>
+      <div style="font-size:20px;font-weight:700;color:#c4b5fd;" id="elapsed">00:00</div>
+    </div>
+  </div>
+
+  <div class="cc">
+    <p class="ct">Detection log</p>
+    <p class="cs">Most recent 20 face-level predictions</p>
+    <div class="log-wrap" id="logWrap">
+      <div style="color:#1e2235;font-size:12px;padding:12px 0;text-align:center;">Waiting for detections...</div>
+    </div>
+  </div>
+</div>
+
+<!-- Row 3: Confidence breakdown bars -->
+<div class="cc" style="margin-bottom:14px;">
+  <p class="ct">Average confidence by class — running mean</p>
+  <p class="cs">Mean softmax confidence across all detections per class this session</p>
+  <div id="avgConfBars" style="margin-top:4px;">
+    <div style="color:#1e2235;font-size:12px;padding:6px 0;">Waiting...</div>
+  </div>
+</div>
+
+<script>
+// ── Connect to Flask-SocketIO backend ──────────
+// Works whether served from Flask (same origin) or opened directly.
+const socket = io();
+
+const GRID = 'rgba(100,116,139,0.10)';
+const TICK = { font: { size: 10 }, color: '#334155' };
+
+// ── Client-side session state ──────────────────
+const session = {
+  confSums:   { 'Mask': 0, 'No Mask': 0, 'Incorrect Mask': 0 },
+  confCounts: { 'Mask': 0, 'No Mask': 0, 'Incorrect Mask': 0 },
+};
+
+// ── Helpers ────────────────────────────────────
+function fmtTime(sec) {
+  const m = String(Math.floor(sec / 60)).padStart(2, '0');
+  const s = String(Math.floor(sec % 60)).padStart(2, '0');
+  return `${m}:${s}`;
+}
+function badgeClass(label) {
+  if (label === 'Mask')    return 'bg-mask';
+  if (label === 'No Mask') return 'bg-nomask';
+  return 'bg-incorrect';
+}
+function confColor(label) {
+  if (label === 'Mask')    return '#86efac';
+  if (label === 'No Mask') return '#fca5a5';
+  return '#fcd34d';
+}
+
+// ── Charts ─────────────────────────────────────
+
+// FPS line — target updated to 30 fps (YOLOv8n is faster)
+const fpsChart = new Chart(document.getElementById('fpsChart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'FPS',    data: [], borderColor: '#818cf8', backgroundColor: 'rgba(129,140,248,0.06)',
+        tension: 0.4, pointRadius: 0, borderWidth: 2, fill: true },
+      { label: 'Target', data: [], borderColor: '#334155', borderDash: [4, 4],
+        pointRadius: 0, borderWidth: 1, fill: false }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: { mode: 'index', intersect: false, backgroundColor: '#1e2235',
+                 titleColor: '#475569', bodyColor: '#e2e8f0',
+                 borderColor: '#2d3148', borderWidth: 1 }
+    },
+    scales: {
+      x: { grid: { color: GRID }, ticks: { ...TICK, maxTicksLimit: 6 },
+           title: { display: true, text: 'elapsed (s)', font: { size: 10 }, color: '#334155' } },
+      y: { min: 0, max: 60, grid: { color: GRID }, ticks: TICK }   // raised to 60 for YOLOv8n
+    }
+  }
+});
+
+// Confidence scatter
+const confChart = new Chart(document.getElementById('confChart'), {
+  type: 'scatter',
+  data: {
+    datasets: [
+      { label: 'Mask',           data: [], backgroundColor: 'rgba(134,239,172,0.6)', pointRadius: 4 },
+      { label: 'No Mask',        data: [], backgroundColor: 'rgba(248,113,113,0.6)', pointRadius: 4 },
+      { label: 'Incorrect Mask', data: [], backgroundColor: 'rgba(252,211,77,0.6)',  pointRadius: 4 },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: { backgroundColor: '#1e2235', titleColor: '#475569', bodyColor: '#e2e8f0',
+                 borderColor: '#2d3148', borderWidth: 1,
+                 callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` } }
+    },
+    scales: {
+      x: { grid: { color: GRID }, ticks: { ...TICK, maxTicksLimit: 6 },
+           title: { display: true, text: 'elapsed (s)', font: { size: 10 }, color: '#334155' } },
+      y: { min: 0, max: 100, grid: { color: GRID }, ticks: { ...TICK, callback: v => v + '%' } }
+    }
+  }
+});
+
+// Donut
+const distChart = new Chart(document.getElementById('distChart'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Mask', 'No Mask', 'Incorrect Mask'],
+    datasets: [{ data: [0, 0, 0],
+                 backgroundColor: ['#86efac', '#f87171', '#fcd34d'],
+                 borderWidth: 0, hoverOffset: 4 }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    animation: { duration: 400 },
+    cutout: '65%',
+    plugins: {
+      legend: { display: false },
+      tooltip: { backgroundColor: '#1e2235', titleColor: '#475569', bodyColor: '#e2e8f0',
+                 borderColor: '#2d3148', borderWidth: 1 }
+    }
+  }
+});
+
+// Count bar
+const countChart = new Chart(document.getElementById('countChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Mask', 'No Mask', 'Incorrect Mask'],
+    datasets: [{
+      label: 'Detections',
+      data: [0, 0, 0],
+      backgroundColor: ['rgba(134,239,172,0.75)', 'rgba(248,113,113,0.75)', 'rgba(252,211,77,0.75)'],
+      borderRadius: 5, barPercentage: 0.55
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    animation: { duration: 300 },
+    plugins: {
+      legend: { display: false },
+      tooltip: { backgroundColor: '#1e2235', titleColor: '#475569', bodyColor: '#e2e8f0',
+                 borderColor: '#2d3148', borderWidth: 1 }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: TICK },
+      y: { grid: { color: GRID }, ticks: TICK, beginAtZero: true }
+    }
+  }
+});
+
+// ── Socket events ──────────────────────────────
+socket.on('connect', () => {
+  document.getElementById('statusDot').classList.remove('off');
+  document.getElementById('statusText').textContent = 'Live';
+});
+socket.on('disconnect', () => {
+  document.getElementById('statusDot').classList.add('off');
+  document.getElementById('statusText').textContent = 'Disconnected';
+});
+
+// ── Main update handler ────────────────────────
+// Receives the payload emitted by Face_Mask_Detection_YOLOv8n.py
+socket.on('detection_update', data => {
+  const counts = data.counts;
+  const total  = Object.values(counts).reduce((a, b) => a + b, 0);
+
+  // ── Metric cards ──
+  document.getElementById('mFrames').textContent    = data.total_frames.toLocaleString();
+  document.getElementById('mFaces').textContent     = data.faces_detected.toLocaleString();
+  document.getElementById('mMask').textContent      = counts['Mask'].toLocaleString();
+  document.getElementById('mNoMask').textContent    = counts['No Mask'].toLocaleString();
+  document.getElementById('mIncorrect').textContent = counts['Incorrect Mask'].toLocaleString();
+
+  // elapsed comes from backend; fall back to 0 if missing
+  document.getElementById('elapsed').textContent = fmtTime(data.elapsed || 0);
+
+  // ── FPS chart ──
+  // fps_history is an array of {t, fps} objects sent by the backend
+  const fpsHistory = data.fps_history || [];
+  fpsChart.data.labels           = fpsHistory.map(d => d.t);
+  fpsChart.data.datasets[0].data = fpsHistory.map(d => d.fps);
+  fpsChart.data.datasets[1].data = fpsHistory.map(() => 30);   // target line at 30 fps
+  fpsChart.update('none');
+  document.getElementById('fpsND').style.display = fpsHistory.length ? 'none' : 'flex';
+
+  // ── Confidence scatter ──
+  // conf_history is an array of {t, label, confidence} objects sent by the backend
+  const confHistory = data.conf_history || [];
+  const maskPts = [], nmPts = [], incPts = [];
+  confHistory.forEach(d => {
+    const pt = { x: d.t, y: d.confidence };
+    if      (d.label === 'Mask')           maskPts.push(pt);
+    else if (d.label === 'No Mask')        nmPts.push(pt);
+    else                                   incPts.push(pt);
+
+    // accumulate running mean
+    session.confSums[d.label]   = (session.confSums[d.label]   || 0) + d.confidence;
+    session.confCounts[d.label] = (session.confCounts[d.label] || 0) + 1;
+  });
+  confChart.data.datasets[0].data = maskPts;
+  confChart.data.datasets[1].data = nmPts;
+  confChart.data.datasets[2].data = incPts;
+  confChart.update('none');
+  document.getElementById('confND').style.display = confHistory.length ? 'none' : 'flex';
+
+  // ── Donut ──
+  distChart.data.datasets[0].data = [counts['Mask'], counts['No Mask'], counts['Incorrect Mask']];
+  distChart.update();
+  document.getElementById('distND').style.display = total > 0 ? 'none' : 'flex';
+
+  const pct = cls => total > 0 ? Math.round(counts[cls] / total * 100) + '%' : '0%';
+  document.getElementById('pMask').textContent      = pct('Mask');
+  document.getElementById('pNoMask').textContent    = pct('No Mask');
+  document.getElementById('pIncorrect').textContent = pct('Incorrect Mask');
+
+  // ── Count bar ──
+  countChart.data.datasets[0].data = [counts['Mask'], counts['No Mask'], counts['Incorrect Mask']];
+  countChart.update();
+  document.getElementById('countND').style.display = total > 0 ? 'none' : 'flex';
+
+  // ── Detection log ──
+  // recent_detections is an array of {time, label, confidence} sent by the backend
+  const recentDets = data.recent_detections || [];
+  const logWrap = document.getElementById('logWrap');
+  if (recentDets.length > 0) {
+    logWrap.innerHTML = recentDets.map(d => `
+      <div class="log-row">
+        <span class="log-time">${fmtTime(d.time)}</span>
+        <span class="log-badge ${badgeClass(d.label)}">${d.label}</span>
+        <div class="conf-bar-wrap">
+          <div class="conf-bar" style="width:${d.confidence}%;background:${confColor(d.label)};"></div>
+        </div>
+        <span class="log-conf">${d.confidence.toFixed(1)}%</span>
+      </div>`).join('');
+  }
+
+  // ── Average confidence bars ──
+  const classes = ['Mask', 'No Mask', 'Incorrect Mask'];
+  const colors  = ['#86efac', '#fca5a5', '#fcd34d'];
+  document.getElementById('avgConfBars').innerHTML = classes.map((cls, i) => {
+    const cnt = session.confCounts[cls] || 0;
+    const avg = cnt > 0 ? (session.confSums[cls] / cnt) : 0;
+    return `
+      <div style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span style="font-size:12px;color:#64748b;">${cls}</span>
+          <span style="font-size:12px;font-weight:600;color:${colors[i]};">${avg > 0 ? avg.toFixed(1) + '%' : '—'}</span>
+        </div>
+        <div style="background:#1a1d2e;border-radius:4px;height:8px;overflow:hidden;">
+          <div style="width:${avg}%;height:100%;background:${colors[i]};border-radius:4px;transition:width 0.5s ease;opacity:0.8;"></div>
+        </div>
+        <div style="font-size:10px;color:#334155;margin-top:2px;">${cnt} detections</div>
+      </div>`;
+  }).join('');
+});
+</script>
+</body>
+</html>
